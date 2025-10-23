@@ -17,7 +17,7 @@ from cs336_basics.tokenizer import Tokenizer
 from pathlib import Path
 import os, io
 from array import array
-from tqdm import tqdm
+from tqdm import tqdm, trange
 
 
 def get_batch(token_ids: npt.NDArray, batch_size: int, context_length: int, device: str) -> tuple[Tensor, Tensor]:
@@ -26,8 +26,10 @@ def get_batch(token_ids: npt.NDArray, batch_size: int, context_length: int, devi
     """
     n = len(token_ids)
     start_indices = np.random.choice(n - context_length, batch_size, replace=False)
-    sample_inputs = torch.stack([torch.from_numpy(token_ids[i:i+context_length]) for i in start_indices]).to(device)
-    sample_outputs = torch.stack([torch.from_numpy(token_ids[i+1:i+1+context_length]) for i in start_indices]).to(device)
+    sample_inputs = torch.stack([torch.from_numpy(token_ids[i:i+context_length].copy())
+                                 for i in start_indices]).to(torch.long).to(device)
+    sample_outputs = torch.stack([torch.from_numpy(token_ids[i+1:i+1+context_length].copy()).to(torch.long)
+                                  for i in start_indices]).to(torch.long).to(device)
     return sample_inputs, sample_outputs
 
 
@@ -56,56 +58,63 @@ def load_checkpoint(src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes],
     return obj["iteration"]
 
 
-# def tokenize_data(tokenizer, input_path, output_path):
-#     if os.path.exists(output_path):
-#         print("Deleting previous output token ids")
-#         os.remove(output_path)
-#
-#     with open(input_path) as f:
-#         all_ids = []
-#         for _id in tokenizer.encode_iterable(f):
-#             all_ids.append(_id)
-#             if len(all_ids) >= 256:
-#                 with open(output_path, "wb") as ft:
-#                     id_array = np.array(all_ids, dtype=np.uint16)
-#                     id_array.tofile(ft)
-#                 all_ids.clear()
-#
-#         if len(all_ids) > 0:
-#             with open(output_path, "wb") as ft:
-#                 id_array = np.array(all_ids, dtype=np.uint16)
-#                 id_array.tofile(ft)
-#             all_ids.clear()
+import os, io
+import numpy as np
+from array import array
+from tqdm import tqdm
 
 
 def tokenize_data_fast(tokenizer, input_path, output_path,
-                       flush_tokens=1_000_000,  # ≈2MB per flush with uint16
-                       dtype=np.uint16):
-    # safety: dtype must match your vocab size
+                       flush_tokens=1_000_000,
+                       dtype=np.uint16,
+                       show_progress=True):
+    """Tokenize a large text file and stream token IDs to disk with tqdm progress."""
     if np.iinfo(dtype).max < len(tokenizer.vocab) - 1:
         raise ValueError("dtype too small for vocab; use np.uint32.")
 
     if os.path.exists(output_path):
         os.remove(output_path)
 
-    # keep the file open once; use buffered IO
+    total_bytes = os.path.getsize(input_path)
+    processed_bytes = 0
+    total_tokens = 0
+
+    pbar = tqdm(total=total_bytes, unit="B", unit_scale=True, disable=not show_progress,
+                desc="Tokenizing")
+
     with open(input_path, "r", encoding="utf-8") as fin, \
          open(output_path, "wb", buffering=io.DEFAULT_BUFFER_SIZE) as fout:
 
         buf = array('H') if dtype == np.uint16 else array('I')
-        # encode_iterable should stream ints; if it yields lists, extend handles that too
-        for ids in tokenizer.encode_iterable(fin):
-            if isinstance(ids, int):
-                buf.append(ids)
-            else:
-                buf.extend(ids)
 
-            if len(buf) >= flush_tokens:
-                buf.tofile(fout)
-                buf = array('H') if dtype == np.uint16 else array('I')
+        for line in fin:  # iterate manually over lines
+            processed_bytes += len(line.encode("utf-8"))
+            token_ids = tokenizer.encode(line)
+            for tok in token_ids:
+                if isinstance(tok, int):
+                    buf.append(tok)
+                else:
+                    buf.extend(tok)
+
+                total_tokens += 1
+
+                if len(buf) >= flush_tokens:
+                    buf.tofile(fout)
+                    buf = array('H') if dtype == np.uint16 else array('I')
+
+            # update tqdm every few lines
+            if processed_bytes - pbar.n > 64 * 1024:  # every 64 KB
+                pbar.n = processed_bytes
+                pbar.refresh()
 
         if len(buf):
             buf.tofile(fout)
+
+    pbar.n = total_bytes
+    pbar.close()
+
+    print(f"\n✅ Done: {total_tokens:,} tokens written to {output_path}")
+
 
 
 if __name__ == "__main__":
@@ -124,7 +133,7 @@ if __name__ == "__main__":
     parser.add_argument("--rope_theta", type=float, default=10000)
     parser.add_argument("--num_layers", type=int, default=4)
     parser.add_argument("--num_heads", type=int, default=16)
-    parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--device", type=str, default="mps")
     # optimizer
     parser.add_argument("--optimizer", type=str, default="AdamW")
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -138,7 +147,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_l2_norm", type=float, default=10.0)
     # save model stats
     parser.add_argument("--checkpoint", type=str, default="../checkpoint")
-    parser.add_argument("--eval_interval", type=int, default=1000)
+    parser.add_argument("--eval_interval", type=int, default=10)
     parser.add_argument("--save_wandb", action="store_true")
     args = parser.parse_args()
     if args.save_wandb:
@@ -162,10 +171,11 @@ if __name__ == "__main__":
     else:
         id_type = np.uint32
 
-    print("Start tokenize training data")
-    tokenize_data_fast(tokenizer, args.train_path, train_token_path, dtype=id_type)
-    print("Start tokenize valid data")
-    tokenize_data_fast(tokenizer, args.valid_path, valid_token_path, dtype=id_type)
+    if not os.path.exists(valid_token_path):
+        tokenize_data_fast(tokenizer, args.valid_path, valid_token_path, dtype=id_type)
+    if not os.path.exists(train_token_path):
+        tokenize_data_fast(tokenizer, args.train_path, train_token_path, dtype=id_type)
+
     train_token_ids = np.memmap(train_token_path, dtype=id_type, mode="r")
     valid_token_ids = np.memmap(valid_token_path, dtype=id_type, mode="r")
 
@@ -184,9 +194,11 @@ if __name__ == "__main__":
                 betas=(args.beta_0, args.beta_1),
                 eps=args.eps)
 
-    train_loss = 0.0
     model.train()
-    for step in range(1, args.total_steps+1):
+    train_loss = 0.0
+    avg_val_loss = float('nan')  # initialize
+    progress_bar = trange(1, args.total_steps + 1, desc="Training", leave=True)
+    for step in progress_bar:
         inputs, targets = get_batch(train_token_ids,
                                     batch_size=args.batch_size,
                                     context_length=args.context_length,
@@ -218,7 +230,6 @@ if __name__ == "__main__":
                     loss = cross_entropy(logits, y)
                     val_losses.append(loss.item())
             avg_val_loss = np.mean(val_losses)
-            print(f"step {step}: train_loss={train_loss:.3f}, val_loss={avg_val_loss:.3f}")
             if args.save_wandb:
                 run.log({
                     "step": step,
@@ -230,8 +241,13 @@ if __name__ == "__main__":
             if not os.path.exists(os.path.dirname(output_path)):
                 os.makedirs(os.path.dirname(output_path))
             save_checkpoint(model, opt, step, output_path)
-            print(f"model saved to {output_path}")
             model.train()
+
+        progress_bar.set_postfix({
+            "train_loss": f"{train_loss:.3f}",
+            "val_loss": f"{avg_val_loss:.3f}",
+            "lr": f"{lr_t:.2e}"
+        })
 
     output_path = Path(args.checkpoint) / f"lm_{train_filename}_final.pt"
     save_checkpoint(model, opt, args.total_steps+1, output_path)

@@ -6,13 +6,13 @@ import torch
 import math
 
 
-def cross_entropy(inputs: Float[Tensor, " batch_size vocab_size"], targets: Int[Tensor, " batch_size"]):
+def cross_entropy(inputs: Float[Tensor, " ... vocab_size"], targets: Int[Tensor, " ..."]):
     """
     Return the cross entropy loss given input logits and targets
     """
     max_logits, _ = torch.max(inputs, dim=-1, keepdim=True)
     inputs = inputs - max_logits
-    target_logits = inputs.gather(dim=1, index=targets.reshape((-1,1))).view(-1)
+    target_logits = inputs.gather(dim=-1, index=targets.unsqueeze(-1)).squeeze(-1)
     loss = torch.logsumexp(inputs, dim=-1) - target_logits
     return torch.mean(loss)
 
@@ -93,8 +93,8 @@ class AdamW(torch.optim.Optimizer):
                 if p.grad is None:
                     continue
                 state = self.state[p]  # Get state associated with p.
-                m = state.get("m", torch.zeros_like(p.data))  # get first moment estimate
-                v = state.get("v", torch.zeros_like(p.data))  # get second moment estimate
+                m = state.get("m", torch.zeros_like(p.data, device=p.device))  # get first moment estimate
+                v = state.get("v", torch.zeros_like(p.data, device=p.device))  # get second moment estimate
                 t = state.get("t", 1)  # get current iteration
                 grad = p.grad.data  # Get the gradient of loss with respect to p.
                 m = betas[0] * m + (1-betas[0]) * grad

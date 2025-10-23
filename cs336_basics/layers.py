@@ -186,13 +186,13 @@ class MultiHeadSelfAttention(nn.Module):
         v_vec = einsum(x, WV_re, "b ... seq_len d_model, h d_k d_model -> b h ... seq_len d_k")
         if self.rope:
             if token_positions is None:
-                b = x.size(0)
-                seq_len = x.size(-2)
+                *batch_and_prefix, seq_len, _ = q_vec.shape
+                target_shape = (*batch_and_prefix, seq_len)
                 device = x.device
                 # same positions for all batch items
-                token_positions = torch.arange(seq_len, device=device).unsqueeze(0)  # (1, seq_len)
+                token_positions = torch.arange(seq_len, device=device)  # (seq_len)
                 # broadcast to batch (and other prefix dims)
-                token_positions = token_positions.expand(b, *([1] * (x.ndim - 3)), seq_len)
+                token_positions = token_positions.expand(target_shape)
 
             q_vec = self.rope(x=q_vec, token_positions=token_positions)
             k_vec = self.rope(x=k_vec, token_positions=token_positions)
