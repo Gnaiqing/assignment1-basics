@@ -77,7 +77,7 @@ MAIN_CFG="$HOME/cs336/assignment1-basics/configs/tinystories_base.yaml"
 # 4) Run
 ########################################
 set -euo pipefail
-python -u $HOME/cs336/assignment1-basics/sc336_basics/train_lm_on_cluster.py \
+python -u $HOME/cs336/assignment1-basics/cs336_basics/train_lm_on_cluster.py \
   --config "$MAIN_CFG" \
   --config "$SLURM_TMPDIR/runtime.yaml" \
   --resume
