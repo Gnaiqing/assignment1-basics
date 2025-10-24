@@ -137,12 +137,12 @@ if __name__ == "__main__":
     # optimizer
     parser.add_argument("--optimizer", type=str, default="AdamW")
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--lr_min", type=float, default=1e-6)
+    parser.add_argument("--lr_min", type=float, default=1e-4)
     parser.add_argument("--warmup_steps", type=int, default=100)
     parser.add_argument("--total_steps", type=int, default=40000)
     parser.add_argument("--weight_decay", type=float, default=1e-2)
     parser.add_argument("--beta_0", type=float, default=0.9)
-    parser.add_argument("--beta_1", type=float, default=0.999)
+    parser.add_argument("--beta_1", type=float, default=0.95)
     parser.add_argument("--eps", type=float, default=1e-8)
     parser.add_argument("--max_l2_norm", type=float, default=10.0)
     # save model stats
