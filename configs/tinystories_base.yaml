@@ -1,0 +1,40 @@
+# ---- data & tokenizer ----
+train_path: "/project/def-koudas/datasets/tinystories/TinyStoriesV2-GPT4-train.txt"
+valid_path: "/project/def-koudas/datasets/tinystories/TinyStoriesV2-GPT4-valid.txt"
+vocab_path:  "/project/def-koudas/datasets/tinystories/TinyStoriesV2-GPT4-train-vocab.json"
+merge_path:  "/project/def-koudas/datasets/tinystories/TinyStoriesV2-GPT4-train-merges.txt"
+batch_size: 1024
+context_length: 256
+
+# ---- model ----
+vocab_size: 10000
+d_model: 512
+d_ff: 1344
+rope_theta: 10000
+num_layers: 4
+num_heads: 16
+device: "auto"   # auto -> cuda if available else cpu
+
+# ---- optimizer & schedule ----
+optimizer: "AdamW"
+lr: 1.0e-3
+lr_min: 1.0e-4
+warmup_steps: 100
+total_steps: 1250
+weight_decay: 1.0e-2
+beta_0: 0.9
+beta_1: 0.95
+eps: 1.0e-8
+max_l2_norm: 10.0
+
+# ---- logging & ckpt ----
+checkpoint: "/scratch/$USER/lm_runs/run1"   # written during training
+eval_interval: 100
+save_wandb: true
+wandb_entity: "uoft-db"
+wandb_project: "cs336-hw1"
+
+# ---- runtime staging (filled by SLURM envs at runtime) ----
+runtime_data_dir: "$SLURM_TMPDIR/data"      # script will read from here if it exists
+archive_dir: "/project/def-koudas/archives/lm_2025_v1"  # optional post-run copy
+num_val_batches: 100

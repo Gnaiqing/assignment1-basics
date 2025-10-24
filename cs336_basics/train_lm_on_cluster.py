@@ -13,9 +13,15 @@ from tqdm import tqdm, trange
 import os, io, argparse, time, typing
 from pathlib import Path
 import yaml
+import os, io
+import numpy as np
+from array import array
+from tqdm import tqdm
+
 
 def _expand_env(s: str) -> str:
     return os.path.expandvars(os.path.expanduser(s))
+
 
 def load_config(config_path: str | None) -> dict:
     if not config_path:
@@ -30,12 +36,14 @@ def load_config(config_path: str | None) -> dict:
         return x
     return rec(cfg)
 
+
 def merge_args_with_yaml(parser: argparse.ArgumentParser, config: dict) -> argparse.Namespace:
     # YAML sets defaults, CLI overrides
     for k, v in config.items():
         if k in {a.dest for a in parser._actions}:
             parser.set_defaults(**{k: v})
     return parser.parse_args()
+
 
 def resolve_device(dev_str: str) -> str:
     if dev_str == "auto":
@@ -103,12 +111,6 @@ def load_checkpoint(src: str | os.PathLike | typing.BinaryIO | typing.IO[bytes],
     return obj["iteration"]
 
 
-import os, io
-import numpy as np
-from array import array
-from tqdm import tqdm
-
-
 def tokenize_data_fast(tokenizer, input_path, output_path,
                        flush_tokens=1_000_000,
                        dtype=np.uint16,
@@ -163,6 +165,7 @@ def tokenize_data_fast(tokenizer, input_path, output_path,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default=None)
     # dataset and tokenizer
     parser.add_argument("--train_path", type=str, default="../data/TinyStoriesV2-GPT4-train.txt")
     parser.add_argument("--valid_path", type=str, default="../data/TinyStoriesV2-GPT4-valid.txt")
@@ -192,24 +195,55 @@ if __name__ == "__main__":
     # save model stats
     parser.add_argument("--checkpoint", type=str, default="../checkpoint")
     parser.add_argument("--eval_interval", type=int, default=10)
+    parser.add_argument("--resume", action="store_true", help="resume from latest checkpoint in ckpt dir if present")
+    parser.add_argument("--num_val_batches", type=int, default=100)
+    parser.add_argument("--runtime_data_dir", type=str, default=None)
+    parser.add_argument("--archive_dir", type=str, default=None)
     parser.add_argument("--save_wandb", action="store_true")
-    args = parser.parse_args()
+    parser.add_argument("--wandb_entity", type=str, default="uoft-db")
+    parser.add_argument("--wandb_project", type=str, default="cs336-hw1")
+
+    # load YAML then merge with CLI
+    cfg = load_config(os.environ.get("CONFIG_PATH", None) or None)  # allows exporting CONFIG_PATH
+    if cfg == {} and "--config" in [a.split("=")[0] for a in os.sys.argv]:
+        # if user provided --config on CLI, load that instead
+        pass
+    args_pre = parser.parse_args()
+    cfg2 = load_config(args_pre.config)
+    cfg.update(cfg2)
+    args = merge_args_with_yaml(parser, cfg)
+
+    # expand env vars and resolve device
+    args.train_path = _expand_env(args.train_path)
+    args.valid_path = _expand_env(args.valid_path)
+    args.vocab_path = _expand_env(args.vocab_path)
+    args.merge_path = _expand_env(args.merge_path)
+    args.checkpoint = _expand_env(args.checkpoint)
+    if args.runtime_data_dir:
+        args.runtime_data_dir = _expand_env(args.runtime_data_dir)
+    if args.archive_dir:
+        args.archive_dir = _expand_env(args.archive_dir)
+    args.device = resolve_device(args.device)
     if args.save_wandb:
-        run = wandb.init(
-            # Set the wandb entity where your project will be logged (generally your team name).
-            entity="uoft-db",
-            # Set the wandb project where this run will be logged.
-            project="cs336-hw1",
-            # Track hyperparameters and run metadata.
-            config=vars(args),
-        )
+        # os.environ.setdefault("WANDB_MODE", "offline")
+        run = wandb.init(entity=args.wandb_entity, project=args.wandb_project, config=vars(args))
 
     # tokenize input datasets
     tokenizer = Tokenizer.from_files(args.vocab_path, args.merge_path, special_tokens=["<|endoftext|>"])
+
+    # Prefer staged copies if runtime_data_dir exists (set by SLURM script)
+    data_root = args.runtime_data_dir if (args.runtime_data_dir and os.path.isdir(args.runtime_data_dir)) else None
+
     train_filename = Path(args.train_path).stem
     valid_filename = Path(args.valid_path).stem
-    train_token_path = f"../preprocess/{train_filename}.bin"
-    valid_token_path = f"../preprocess/{valid_filename}.bin"
+
+    if data_root:
+        train_token_path = f"{data_root}/{train_filename}.bin"
+        valid_token_path = f"{data_root}/{valid_filename}.bin"
+    else:
+        train_token_path = f"../preprocess/{train_filename}.bin"
+        valid_token_path = f"../preprocess/{valid_filename}.bin"
+
     if args.vocab_size <= np.iinfo(np.uint16).max:
         id_type = np.uint16
     else:
@@ -237,6 +271,15 @@ if __name__ == "__main__":
                 weight_decay=args.weight_decay,
                 betas=(args.beta_0, args.beta_1),
                 eps=args.eps)
+
+    if args.resume:
+        ckpt_dir = Path(args.checkpoint)
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        candidates = sorted(ckpt_dir.glob("lm_*_*.pt"))
+        if candidates:
+            last = candidates[-1]
+            print(f"Resuming from {last}")
+            _iter = load_checkpoint(last, model, opt)
 
     model.train()
 
