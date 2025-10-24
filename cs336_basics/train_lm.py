@@ -5,6 +5,7 @@ from typing import Optional
 import typing
 import json
 import torch
+import time
 import torch.nn as nn
 import math
 import wandb
@@ -116,7 +117,6 @@ def tokenize_data_fast(tokenizer, input_path, output_path,
     print(f"\n✅ Done: {total_tokens:,} tokens written to {output_path}")
 
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # dataset and tokenizer
@@ -124,7 +124,7 @@ if __name__ == "__main__":
     parser.add_argument("--valid_path", type=str, default="../data/TinyStoriesV2-GPT4-valid.txt")
     parser.add_argument("--vocab_path", type=str, default="../preprocess/TinyStoriesV2-GPT4-train-vocab.json")
     parser.add_argument("--merge_path", type=str, default="../preprocess/TinyStoriesV2-GPT4-train-merges.txt")
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--context_length", type=int, default=256)
     # model
     parser.add_argument("--vocab_size", type=int, default=10000)
@@ -139,7 +139,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--lr_min", type=float, default=1e-4)
     parser.add_argument("--warmup_steps", type=int, default=100)
-    parser.add_argument("--total_steps", type=int, default=40000)
+    parser.add_argument("--total_steps", type=int, default=20000)
     parser.add_argument("--weight_decay", type=float, default=1e-2)
     parser.add_argument("--beta_0", type=float, default=0.9)
     parser.add_argument("--beta_1", type=float, default=0.95)
@@ -195,17 +195,32 @@ if __name__ == "__main__":
                 eps=args.eps)
 
     model.train()
-    train_loss = 0.0
-    avg_val_loss = float('nan')  # initialize
+
+    # Exponential moving average for training loss
+    ema_beta = 0.9
+    train_loss_ema = None  # will init on first step
+    ema_bias_correction = 1.0
+
+    avg_val_loss = float('nan')
     progress_bar = trange(1, args.total_steps + 1, desc="Training", leave=True)
+    start_time = time.time()
+
+    # Optionally, predefine a deterministic set of validation batches:
+    rng_val = np.random.RandomState(42)
+    fixed_val_indices = [rng_val.randint(0, len(valid_token_ids) - args.context_length) for _ in range(100)]
+
     for step in progress_bar:
         inputs, targets = get_batch(train_token_ids,
                                     batch_size=args.batch_size,
                                     context_length=args.context_length,
                                     device=args.device)
+
         logits = model(inputs)
-        loss = cross_entropy(logits, targets)
+        train_loss_batch_t = cross_entropy(logits, targets)  # tensor
+        train_loss_batch = float(train_loss_batch_t.item())  # scalar
+
         opt.zero_grad()
+
         lr_t = calc_lr_cosine_schedule(
             t=step,
             lr_max=args.lr,
@@ -216,38 +231,116 @@ if __name__ == "__main__":
         for group in opt.param_groups:
             group["lr"] = lr_t
 
-        loss.backward()
-        train_loss = 0.9 * train_loss + 0.1 * loss.item()  # weighting average
+        train_loss_batch_t.backward()
         gradient_clipping(model.parameters(), args.max_l2_norm)
         opt.step()
+
+        # Update EMA with bias correction: m_t = beta*m_{t-1} + (1-beta)*x_t; m_hat = m_t / (1 - beta^t)
+        if train_loss_ema is None:
+            train_loss_ema = train_loss_batch
+            ema_bias_correction = 1.0 - ema_beta  # beta^1
+        else:
+            train_loss_ema = ema_beta * train_loss_ema + (1.0 - ema_beta) * train_loss_batch
+            ema_bias_correction = 1.0 - (ema_beta ** step)
+
+        train_loss_ema_corrected = train_loss_ema / max(ema_bias_correction, 1e-12)
+
         if step % args.eval_interval == 0:
             model.eval()
             val_losses = []
             with torch.no_grad():
-                for _ in range(100):  # could be all, or just e.g. 100 batches
-                    x, y = get_batch(valid_token_ids, args.batch_size, args.context_length, args.device)
-                    logits = model(x)
-                    loss = cross_entropy(logits, y)
-                    val_losses.append(loss.item())
-            avg_val_loss = np.mean(val_losses)
+                # Use fixed deterministic subset for comparability:
+                for idx in fixed_val_indices:
+                    x = torch.from_numpy(valid_token_ids[idx:idx + args.context_length]).to(args.device).unsqueeze(
+                        0).repeat(args.batch_size, 1)
+                    y = torch.from_numpy(valid_token_ids[idx + 1:idx + 1 + args.context_length]).to(
+                        args.device).unsqueeze(0).repeat(args.batch_size, 1)
+                    val_logits = model(x)
+                    val_loss_t = cross_entropy(val_logits, y)
+                    val_losses.append(float(val_loss_t.item()))
+            avg_val_loss = float(np.mean(val_losses))
+
             if args.save_wandb:
+                time_elapsed_min = (time.time() - start_time) / 60.0
                 run.log({
                     "step": step,
-                    "train_loss": loss,
-                    "valid_loss": avg_val_loss
+                    "training_time_min": time_elapsed_min,
+                    "lr": lr_t,
+                    # log both:
+                    "train_loss_batch": train_loss_batch,
+                    "train_loss_ema": train_loss_ema_corrected,
+                    "valid_loss": avg_val_loss,
                 })
 
             output_path = Path(args.checkpoint) / f"lm_{train_filename}_{step}.pt"
-            if not os.path.exists(os.path.dirname(output_path)):
-                os.makedirs(os.path.dirname(output_path))
+            os.makedirs(output_path.parent, exist_ok=True)
             save_checkpoint(model, opt, step, output_path)
             model.train()
 
         progress_bar.set_postfix({
-            "train_loss": f"{train_loss:.3f}",
+            "train_loss(batch)": f"{train_loss_batch:.3f}",
+            "train_loss(ema)": f"{train_loss_ema_corrected:.3f}",
             "val_loss": f"{avg_val_loss:.3f}",
-            "lr": f"{lr_t:.2e}"
+            "lr": f"{lr_t:.2e}",
         })
+
+    # model.train()
+    # train_loss = 0.0
+    # avg_val_loss = float('nan')  # initialize
+    # progress_bar = trange(1, args.total_steps + 1, desc="Training", leave=True)
+    # start_time = time.time()
+    # for step in progress_bar:
+    #     inputs, targets = get_batch(train_token_ids,
+    #                                 batch_size=args.batch_size,
+    #                                 context_length=args.context_length,
+    #                                 device=args.device)
+    #     logits = model(inputs)
+    #     loss = cross_entropy(logits, targets)
+    #     opt.zero_grad()
+    #     lr_t = calc_lr_cosine_schedule(
+    #         t=step,
+    #         lr_max=args.lr,
+    #         lr_min=args.lr_min,
+    #         t_w=args.warmup_steps,
+    #         t_c=args.total_steps,
+    #     )
+    #     for group in opt.param_groups:
+    #         group["lr"] = lr_t
+    #
+    #     loss.backward()
+    #     train_loss = 0.9 * train_loss + 0.1 * loss.item()  # weighting average
+    #     gradient_clipping(model.parameters(), args.max_l2_norm)
+    #     opt.step()
+    #     if step % args.eval_interval == 0:
+    #         model.eval()
+    #         val_losses = []
+    #         with torch.no_grad():
+    #             for _ in range(100):  # could be all, or just e.g. 100 batches
+    #                 x, y = get_batch(valid_token_ids, args.batch_size, args.context_length, args.device)
+    #                 logits = model(x)
+    #                 loss = cross_entropy(logits, y)
+    #                 val_losses.append(loss.item())
+    #         avg_val_loss = np.mean(val_losses)
+    #         if args.save_wandb:
+    #             time_elapsed = (time.time() - start_time) / 60
+    #             run.log({
+    #                 "step": step,
+    #                 "training_time(min)": time_elapsed,
+    #                 "train_loss": loss,
+    #                 "valid_loss": avg_val_loss
+    #             })
+    #
+    #         output_path = Path(args.checkpoint) / f"lm_{train_filename}_{step}.pt"
+    #         if not os.path.exists(os.path.dirname(output_path)):
+    #             os.makedirs(os.path.dirname(output_path))
+    #         save_checkpoint(model, opt, step, output_path)
+    #         model.train()
+    #
+    #     progress_bar.set_postfix({
+    #         "train_loss": f"{train_loss:.3f}",
+    #         "val_loss": f"{avg_val_loss:.3f}",
+    #         "lr": f"{lr_t:.2e}"
+    #     })
 
     output_path = Path(args.checkpoint) / f"lm_{train_filename}_final.pt"
     save_checkpoint(model, opt, args.total_steps+1, output_path)
