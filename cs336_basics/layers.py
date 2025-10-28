@@ -4,6 +4,9 @@ import torch.nn.functional as F
 from einops import rearrange, einsum, reduce
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
+torch.backends.cuda.enable_flash_sdp(True)
+torch.backends.cuda.enable_mem_efficient_sdp(True)
+torch.backends.cuda.enable_math_sdp(True)
 
 
 def initialize_linear_weight(out_features, in_features, device=None, dtype=None):
@@ -158,7 +161,7 @@ def scaled_dot_product_attention(query: Float[Tensor, "b ... n d_k"],
 
 class MultiHeadSelfAttention(nn.Module):
     def __init__(self, d_model: int, num_heads: int, max_seq_len=None, theta=None, device=None, dtype=None):
-        super(MultiHeadSelfAttention, self).__init__()
+        super().__init__()
         d_k = d_model // num_heads
         self.WQ = initialize_linear_weight(num_heads * d_k, d_model, device=device, dtype=dtype)
         self.WK = initialize_linear_weight(num_heads * d_k, d_model, device=device, dtype=dtype)
@@ -167,41 +170,88 @@ class MultiHeadSelfAttention(nn.Module):
         self.d_model = d_model
         self.num_heads = num_heads
         self.d_k = d_k
-        if theta:
-            self.rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len, device=device)
-        else:
-            self.rope = None
+        self.rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len, device=device) if theta else None
 
     def forward(self, x: Float[Tensor, "b ... seq_len d_model"],
                 token_positions: Int[Tensor, " ... seq_len"] | None = None) -> Float[Tensor, "b ... seq_len d_model"]:
-        """
-        Multihead self attention on input x
-        """
+        # project
         WQ_re = rearrange(self.WQ, "(h d_k) d_model -> h d_k d_model", d_k=self.d_k)
         WK_re = rearrange(self.WK, "(h d_k) d_model -> h d_k d_model", d_k=self.d_k)
         WV_re = rearrange(self.WV, "(h d_k) d_model -> h d_k d_model", d_k=self.d_k)
         WO_re = rearrange(self.WO, "d_model (h d_k) -> d_model h d_k", d_k=self.d_k)
-        q_vec = einsum(x, WQ_re, "b ... seq_len d_model, h d_k d_model -> b h ... seq_len d_k")
-        k_vec = einsum(x, WK_re, "b ... seq_len d_model, h d_k d_model -> b h ... seq_len d_k")
-        v_vec = einsum(x, WV_re, "b ... seq_len d_model, h d_k d_model -> b h ... seq_len d_k")
+
+        q = einsum(x, WQ_re, "b ... n d_model, h d_k d_model -> b h ... n d_k").contiguous()
+        k = einsum(x, WK_re, "b ... n d_model, h d_k d_model -> b h ... n d_k").contiguous()
+        v = einsum(x, WV_re, "b ... n d_model, h d_k d_model -> b h ... n d_k").contiguous()
+
         if self.rope:
             if token_positions is None:
-                *batch_and_prefix, seq_len, _ = q_vec.shape
-                target_shape = (*batch_and_prefix, seq_len)
-                device = x.device
-                # same positions for all batch items
-                token_positions = torch.arange(seq_len, device=device)  # (seq_len)
-                # broadcast to batch (and other prefix dims)
-                token_positions = token_positions.expand(target_shape)
+                seq_len = q.shape[-2]
+                pos = torch.arange(seq_len, device=x.device)
+                token_positions = pos.expand(*q.shape[0:2], seq_len) if q.dim() == 4 else pos
+            q = self.rope(q, token_positions)
+            k = self.rope(k, token_positions)
 
-            q_vec = self.rope(x=q_vec, token_positions=token_positions)
-            k_vec = self.rope(x=k_vec, token_positions=token_positions)
+        # Flash/SDPA — no explicit mask allocation; use is_causal=True
+        # Shapes expected: (B, H, L, D)
+        B, H = q.shape[0], q.shape[1]
+        q = q.view(B, H, -1, self.d_k)
+        k = k.view(B, H, -1, self.d_k)
+        v = v.view(B, H, -1, self.d_k)
 
-        seq_len = x.size(dim=-2)
-        mask = torch.triu(torch.ones((seq_len, seq_len), dtype=torch.bool, device=x.device)).T
-        attention_vec = scaled_dot_product_attention(q_vec, k_vec, v_vec, mask) # "b h ... seq_len d_k"
-        output = einsum(attention_vec, WO_re, "b h ... seq_len d_k, d_model h d_k -> b ... seq_len d_model")
-        return output
+        attn = F.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=True)
+        # back to (B, ..., L, D) then project out
+        attn = attn.view_as(q)
+        out = einsum(attn, WO_re, "b h ... n d_k, d_model h d_k -> b ... n d_model")
+        return out
+
+
+# class MultiHeadSelfAttention(nn.Module):
+#     def __init__(self, d_model: int, num_heads: int, max_seq_len=None, theta=None, device=None, dtype=None):
+#         super(MultiHeadSelfAttention, self).__init__()
+#         d_k = d_model // num_heads
+#         self.WQ = initialize_linear_weight(num_heads * d_k, d_model, device=device, dtype=dtype)
+#         self.WK = initialize_linear_weight(num_heads * d_k, d_model, device=device, dtype=dtype)
+#         self.WV = initialize_linear_weight(num_heads * d_k, d_model, device=device, dtype=dtype)
+#         self.WO = initialize_linear_weight(d_model, num_heads * d_k, device=device, dtype=dtype)
+#         self.d_model = d_model
+#         self.num_heads = num_heads
+#         self.d_k = d_k
+#         if theta:
+#             self.rope = RotaryPositionalEmbedding(theta, d_k, max_seq_len, device=device)
+#         else:
+#             self.rope = None
+#
+#     def forward(self, x: Float[Tensor, "b ... seq_len d_model"],
+#                 token_positions: Int[Tensor, " ... seq_len"] | None = None) -> Float[Tensor, "b ... seq_len d_model"]:
+#         """
+#         Multihead self attention on input x
+#         """
+#         WQ_re = rearrange(self.WQ, "(h d_k) d_model -> h d_k d_model", d_k=self.d_k)
+#         WK_re = rearrange(self.WK, "(h d_k) d_model -> h d_k d_model", d_k=self.d_k)
+#         WV_re = rearrange(self.WV, "(h d_k) d_model -> h d_k d_model", d_k=self.d_k)
+#         WO_re = rearrange(self.WO, "d_model (h d_k) -> d_model h d_k", d_k=self.d_k)
+#         q_vec = einsum(x, WQ_re, "b ... seq_len d_model, h d_k d_model -> b h ... seq_len d_k")
+#         k_vec = einsum(x, WK_re, "b ... seq_len d_model, h d_k d_model -> b h ... seq_len d_k")
+#         v_vec = einsum(x, WV_re, "b ... seq_len d_model, h d_k d_model -> b h ... seq_len d_k")
+#         if self.rope:
+#             if token_positions is None:
+#                 *batch_and_prefix, seq_len, _ = q_vec.shape
+#                 target_shape = (*batch_and_prefix, seq_len)
+#                 device = x.device
+#                 # same positions for all batch items
+#                 token_positions = torch.arange(seq_len, device=device)  # (seq_len)
+#                 # broadcast to batch (and other prefix dims)
+#                 token_positions = token_positions.expand(target_shape)
+#
+#             q_vec = self.rope(x=q_vec, token_positions=token_positions)
+#             k_vec = self.rope(x=k_vec, token_positions=token_positions)
+#
+#         seq_len = x.size(dim=-2)
+#         mask = torch.triu(torch.ones((seq_len, seq_len), dtype=torch.bool, device=x.device)).T
+#         attention_vec = scaled_dot_product_attention(q_vec, k_vec, v_vec, mask) # "b h ... seq_len d_k"
+#         output = einsum(attention_vec, WO_re, "b h ... seq_len d_k, d_model h d_k -> b ... seq_len d_model")
+#         return output
 
 
 class TransformerBlock(nn.Module):
