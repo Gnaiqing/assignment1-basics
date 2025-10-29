@@ -13,29 +13,18 @@ from tqdm import tqdm, trange
 import os, io, argparse, time, typing
 from pathlib import Path
 import yaml
+from contextlib import nullcontext
 
-def _expand_env(s: str) -> str:
-    return os.path.expandvars(os.path.expanduser(s))
 
-def load_config(config_path: str | None) -> dict:
-    if not config_path:
-        return {}
-    with open(config_path, "r") as f:
-        cfg = yaml.safe_load(f) or {}
-    # expand $VARS in string values
-    def rec(x):
-        if isinstance(x, str): return _expand_env(x)
-        if isinstance(x, dict): return {k: rec(v) for k, v in x.items()}
-        if isinstance(x, list): return [rec(v) for v in x]
-        return x
-    return rec(cfg)
+def autocast_ctx(device_str: str, dtype: torch.dtype):
+    if device_str == "cuda":
+        return torch.autocast("cuda", dtype=dtype)
+    # CPU autocast supports bf16; keep it for consistency
+    if device_str == "cpu":
+        return torch.autocast("cpu", dtype=torch.bfloat16 if dtype==torch.bfloat16 else torch.float32)
+    # mps (Apple) and other backends: disable autocast
+    return nullcontext()
 
-def merge_args_with_yaml(parser: argparse.ArgumentParser, config: dict) -> argparse.Namespace:
-    # YAML sets defaults, CLI overrides
-    for k, v in config.items():
-        if k in {a.dest for a in parser._actions}:
-            parser.set_defaults(**{k: v})
-    return parser.parse_args()
 
 def resolve_device(dev_str: str) -> str:
     if dev_str == "auto":
@@ -178,6 +167,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_layers", type=int, default=4)
     parser.add_argument("--num_heads", type=int, default=16)
     parser.add_argument("--device", type=str, default="mps")
+    parser.add_argument("--dtype", type=str, default="bf16")
     # optimizer
     parser.add_argument("--optimizer", type=str, default="AdamW")
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -204,6 +194,9 @@ if __name__ == "__main__":
             config=vars(args),
         )
 
+    torch.backends.cuda.enable_flash_sdp(True)
+    torch.backends.cuda.enable_mem_efficient_sdp(True)
+    torch.backends.cuda.enable_math_sdp(True)
     # tokenize input datasets
     tokenizer = Tokenizer.from_files(args.vocab_path, args.merge_path, special_tokens=["<|endoftext|>"])
     train_filename = Path(args.train_path).stem
@@ -222,6 +215,14 @@ if __name__ == "__main__":
 
     train_token_ids = np.memmap(train_token_path, dtype=id_type, mode="r")
     valid_token_ids = np.memmap(valid_token_path, dtype=id_type, mode="r")
+    if args.dtype == "bf16":
+        data_type = torch.bfloat16
+    elif args.dtype == "fp16":
+        data_type = torch.float16
+    elif args.dtype == "fp32":
+        data_type = torch.float32
+    else:
+        raise ValueError(f"dtype {args.dtype} not supported")
 
     # setup model and optimizer
     model = Transformer(vocab_size=args.vocab_size,
@@ -231,7 +232,8 @@ if __name__ == "__main__":
                         num_heads=args.num_heads,
                         d_ff=args.d_ff,
                         rope_theta=args.rope_theta,
-                        device=args.device)
+                        device=args.device,
+                        dtype=data_type)
     opt = AdamW(params=model.parameters(),
                 lr=args.lr,
                 weight_decay=args.weight_decay,

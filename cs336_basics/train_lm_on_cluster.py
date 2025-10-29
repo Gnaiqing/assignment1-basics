@@ -17,6 +17,17 @@ import os, io
 import numpy as np
 from array import array
 from tqdm import tqdm
+from contextlib import nullcontext
+
+
+def autocast_ctx(device_str: str, dtype: torch.dtype):
+    if device_str == "cuda":
+        return torch.autocast("cuda", dtype=dtype)
+    # CPU autocast supports bf16; keep it for consistency
+    if device_str == "cpu":
+        return torch.autocast("cpu", dtype=torch.bfloat16 if dtype==torch.bfloat16 else torch.float32)
+    # mps (Apple) and other backends: disable autocast
+    return nullcontext()
 
 
 def _expand_env(s: str) -> str:
@@ -180,7 +191,8 @@ if __name__ == "__main__":
     parser.add_argument("--rope_theta", type=float, default=10000)
     parser.add_argument("--num_layers", type=int, default=4)
     parser.add_argument("--num_heads", type=int, default=16)
-    parser.add_argument("--device", type=str, default="mps")
+    parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--dtype", type=str, default="bf16")
     # optimizer
     parser.add_argument("--optimizer", type=str, default="AdamW")
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -205,9 +217,6 @@ if __name__ == "__main__":
 
     # load YAML then merge with CLI
     cfg = load_config(os.environ.get("CONFIG_PATH", None) or None)  # allows exporting CONFIG_PATH
-    if cfg == {} and "--config" in [a.split("=")[0] for a in os.sys.argv]:
-        # if user provided --config on CLI, load that instead
-        pass
     args_pre = parser.parse_args()
     cfg2 = load_config(args_pre.config)
     cfg.update(cfg2)
@@ -228,6 +237,9 @@ if __name__ == "__main__":
         # os.environ.setdefault("WANDB_MODE", "offline")
         run = wandb.init(entity=args.wandb_entity, project=args.wandb_project, config=vars(args))
 
+    torch.backends.cuda.enable_flash_sdp(True)
+    torch.backends.cuda.enable_mem_efficient_sdp(True)
+    torch.backends.cuda.enable_math_sdp(True)
     # tokenize input datasets
     tokenizer = Tokenizer.from_files(args.vocab_path, args.merge_path, special_tokens=["<|endoftext|>"])
 
@@ -257,6 +269,16 @@ if __name__ == "__main__":
     train_token_ids = np.memmap(train_token_path, dtype=id_type, mode="r")
     valid_token_ids = np.memmap(valid_token_path, dtype=id_type, mode="r")
 
+    if args.dtype == "bf16":
+        data_type = torch.bfloat16
+    elif args.dtype == "fp16":
+        data_type = torch.float16
+    elif args.dtype == "fp32":
+        data_type = torch.float32
+    else:
+        raise ValueError(f"dtype {args.dtype} not supported")
+
+    torch.set_float32_matmul_precision("high")  # optional
     # setup model and optimizer
     model = Transformer(vocab_size=args.vocab_size,
                         context_length=args.context_length,
@@ -298,11 +320,12 @@ if __name__ == "__main__":
                                     context_length=args.context_length,
                                     device=args.device)
 
-        logits = model(inputs)
-        train_loss_batch_t = cross_entropy(logits, targets)  # tensor
-        train_loss_batch = float(train_loss_batch_t.item())  # scalar
+        with autocast_ctx(args.device, data_type):
+            logits = model(inputs)
+            train_loss_batch_t = cross_entropy(logits, targets)  # tensor
+            train_loss_batch = float(train_loss_batch_t.item())  # scalar
 
-        opt.zero_grad()
+        opt.zero_grad(set_to_none=True)
 
         lr_t = calc_lr_cosine_schedule(
             t=step,
@@ -318,7 +341,6 @@ if __name__ == "__main__":
         gradient_clipping(model.parameters(), args.max_l2_norm)
         opt.step()
 
-        # Update EMA with bias correction: m_t = beta*m_{t-1} + (1-beta)*x_t; m_hat = m_t / (1 - beta^t)
         if train_loss_ema is None:
             train_loss_ema = train_loss_batch
             ema_bias_correction = 1.0 - ema_beta  # beta^1
@@ -331,13 +353,13 @@ if __name__ == "__main__":
         if step % args.eval_interval == 0:
             model.eval()
             val_losses = []
-            with torch.no_grad():
-                # Use fixed deterministic subset for comparability:
-                for i in range(100):
+            with torch.no_grad(), autocast_ctx(args.device, data_type):
+                for i in range(args.num_val_batches):
                     x, y = get_batch(valid_token_ids, args.batch_size, args.context_length, args.device, seed=i)
                     val_logits = model(x)
                     val_loss_t = cross_entropy(val_logits, y)
                     val_losses.append(float(val_loss_t.item()))
+
             avg_val_loss = float(np.mean(val_losses))
 
             if args.save_wandb:

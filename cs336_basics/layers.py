@@ -4,9 +4,7 @@ import torch.nn.functional as F
 from einops import rearrange, einsum, reduce
 from jaxtyping import Bool, Float, Int
 from torch import Tensor
-torch.backends.cuda.enable_flash_sdp(True)
-torch.backends.cuda.enable_mem_efficient_sdp(True)
-torch.backends.cuda.enable_math_sdp(True)
+from torch.utils.checkpoint import checkpoint
 
 
 def initialize_linear_weight(out_features, in_features, device=None, dtype=None):
@@ -181,6 +179,7 @@ class MultiHeadSelfAttention(nn.Module):
         WO_re = rearrange(self.WO, "d_model (h d_k) -> d_model h d_k", d_k=self.d_k)
 
         q = einsum(x, WQ_re, "b ... n d_model, h d_k d_model -> b h ... n d_k").contiguous()
+        assert q.dtype in (torch.float16, torch.bfloat16), f"q dtype={q.dtype} blocks Flash/SDPA"
         k = einsum(x, WK_re, "b ... n d_model, h d_k d_model -> b h ... n d_k").contiguous()
         v = einsum(x, WV_re, "b ... n d_model, h d_k d_model -> b h ... n d_k").contiguous()
 
@@ -301,7 +300,13 @@ class Transformer(nn.Module):
         Feed in batch of text and predict unnormalized next token
         """
         x = self.token_embeddings(x)
-        x = self.layers(x)
+        # x = self.layers(x)
+        for block in self.layers:
+            # checkpoint wants a function that consumes tensors only
+            def fn(inp):
+                return block(inp)
+
+            x = checkpoint(fn, x, use_reentrant=False)
         x = self.lm_head(self.ln_final(x))
         return x
 
