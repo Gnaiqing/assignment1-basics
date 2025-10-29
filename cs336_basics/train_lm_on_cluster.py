@@ -206,7 +206,7 @@ if __name__ == "__main__":
     parser.add_argument("--max_l2_norm", type=float, default=10.0)
     # save model stats
     parser.add_argument("--checkpoint", type=str, default="../checkpoint")
-    parser.add_argument("--eval_interval", type=int, default=10)
+    parser.add_argument("--eval_interval", type=int, default=100)
     parser.add_argument("--resume", action="store_true", help="resume from latest checkpoint in ckpt dir if present")
     parser.add_argument("--num_val_batches", type=int, default=100)
     parser.add_argument("--runtime_data_dir", type=str, default=None)
@@ -233,9 +233,6 @@ if __name__ == "__main__":
     if args.archive_dir:
         args.archive_dir = _expand_env(args.archive_dir)
     args.device = resolve_device(args.device)
-    if args.save_wandb:
-        # os.environ.setdefault("WANDB_MODE", "offline")
-        run = wandb.init(entity=args.wandb_entity, project=args.wandb_project, config=vars(args))
 
     torch.backends.cuda.enable_flash_sdp(True)
     torch.backends.cuda.enable_mem_efficient_sdp(True)
@@ -277,6 +274,10 @@ if __name__ == "__main__":
         data_type = torch.float32
     else:
         raise ValueError(f"dtype {args.dtype} not supported")
+
+    if args.save_wandb:
+        # os.environ.setdefault("WANDB_MODE", "offline")
+        run = wandb.init(entity=args.wandb_entity, project=args.wandb_project, config=vars(args))
 
     torch.set_float32_matmul_precision("high")  # optional
     # setup model and optimizer
@@ -349,6 +350,13 @@ if __name__ == "__main__":
             ema_bias_correction = 1.0 - (ema_beta ** step)
 
         train_loss_ema_corrected = train_loss_ema / max(ema_bias_correction, 1e-12)
+        if args.save_wandb:
+            wandb.log({
+                "step": step,
+                "train/loss": train_loss_batch,
+                "train/loss_ema": train_loss_ema,
+                "train/lr": lr_t,
+            }, step=step)
 
         if step % args.eval_interval == 0:
             model.eval()
@@ -361,23 +369,17 @@ if __name__ == "__main__":
                     val_losses.append(float(val_loss_t.item()))
 
             avg_val_loss = float(np.mean(val_losses))
+            model.train()
 
             if args.save_wandb:
-                time_elapsed_min = (time.time() - start_time) / 60.0
-                run.log({
-                    "step": step,
-                    "training_time_min": time_elapsed_min,
-                    "lr": lr_t,
-                    # log both:
-                    "train_loss_batch": train_loss_batch,
-                    "train_loss_ema": train_loss_ema_corrected,
+                wandb.log({
                     "valid_loss": avg_val_loss,
-                })
+                }, step=step)
 
             output_path = Path(args.checkpoint) / f"lm_{train_filename}_{step}.pt"
             os.makedirs(output_path.parent, exist_ok=True)
             save_checkpoint(model, opt, step, output_path)
-            model.train()
+
 
         progress_bar.set_postfix({
             "train_loss(batch)": f"{train_loss_batch:.3f}",

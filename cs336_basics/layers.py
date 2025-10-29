@@ -179,7 +179,6 @@ class MultiHeadSelfAttention(nn.Module):
         WO_re = rearrange(self.WO, "d_model (h d_k) -> d_model h d_k", d_k=self.d_k)
 
         q = einsum(x, WQ_re, "b ... n d_model, h d_k d_model -> b h ... n d_k").contiguous()
-        assert q.dtype in (torch.float16, torch.bfloat16), f"q dtype={q.dtype} blocks Flash/SDPA"
         k = einsum(x, WK_re, "b ... n d_model, h d_k d_model -> b h ... n d_k").contiguous()
         v = einsum(x, WV_re, "b ... n d_model, h d_k d_model -> b h ... n d_k").contiguous()
 
