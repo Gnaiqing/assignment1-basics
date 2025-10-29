@@ -373,7 +373,7 @@ if __name__ == "__main__":
 
             if args.save_wandb:
                 wandb.log({
-                    "valid_loss": avg_val_loss,
+                    "val/loss": avg_val_loss,
                 }, step=step)
 
             output_path = Path(args.checkpoint) / f"lm_{train_filename}_{step}.pt"
