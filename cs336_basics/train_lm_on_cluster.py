@@ -294,11 +294,30 @@ if __name__ == "__main__":
                         d_ff=args.d_ff,
                         rope_theta=args.rope_theta,
                         device=args.device)
-    opt = AdamW(params=model.parameters(),
-                lr=args.lr,
-                weight_decay=args.weight_decay,
-                betas=(args.beta_0, args.beta_1),
-                eps=args.eps)
+    decay, no_decay = [], []
+    for name, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if name.endswith("bias") or "norm" in name.lower():
+            no_decay.append(p)
+        else:
+            decay.append(p)
+
+    opt = AdamW(
+        [
+            {"params": decay, "weight_decay": args.weight_decay},
+            {"params": no_decay, "weight_decay": 0.0},
+        ],
+        lr=args.lr,
+        betas=(args.beta_0, args.beta_1),
+        eps=args.eps,
+    )
+
+    # opt = AdamW(params=model.parameters(),
+    #             lr=args.lr,
+    #             weight_decay=args.weight_decay,
+    #             betas=(args.beta_0, args.beta_1),
+    #             eps=args.eps)
 
     if args.resume:
         ckpt_dir = Path(args.checkpoint)
@@ -317,6 +336,7 @@ if __name__ == "__main__":
     ema_bias_correction = 1.0
 
     avg_val_loss = float('nan')
+    best_val_loss = 100.0
     progress_bar = trange(1, args.total_steps + 1, desc="Training", leave=True)
     start_time = time.time()
 
@@ -384,7 +404,11 @@ if __name__ == "__main__":
             output_path = Path(args.checkpoint) / f"lm_{train_filename}_{timestamp_string}_{step}.pt"
             os.makedirs(output_path.parent, exist_ok=True)
             save_checkpoint(model, opt, step, output_path)
-
+            if avg_val_loss < best_val_loss:
+                print(f"Best current model saved to {output_path} at step {step}")
+                best_val_loss = avg_val_loss
+                best_model_path = Path(args.checkpoint) / f"lm_{train_filename}_{timestamp_string}_best.pt"
+                save_checkpoint(model, opt, step, best_model_path)
 
         progress_bar.set_postfix({
             "train_loss(batch)": f"{train_loss_batch:.3f}",

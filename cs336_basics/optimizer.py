@@ -65,48 +65,97 @@ class SGD(torch.optim.Optimizer):
         return loss
 
 
+# class AdamW(torch.optim.Optimizer):
+#     def __init__(self,
+#                  params,
+#                  lr=1e-3,
+#                  weight_decay=0.01,
+#                  betas=(0.9, 0.999),
+#                  eps=1e-8):
+#         if lr < 0:
+#             raise ValueError(f"Invalid learning rate: {lr}")
+#         defaults = {
+#             "lr": lr,
+#             "weight_decay": weight_decay,
+#             "betas": betas,
+#             "eps": eps
+#         }
+#         super().__init__(params, defaults)
+#
+#     def step(self, closure: Optional[Callable] = None):
+#         loss = None if closure is None else closure()
+#         for group in self.param_groups:
+#             lr = group["lr"]  # Get the learning rate.
+#             weight_decay = group["weight_decay"]
+#             betas = group["betas"]
+#             eps = group["eps"]
+#             for p in group["params"]:
+#                 if p.grad is None:
+#                     continue
+#                 state = self.state[p]  # Get state associated with p.
+#                 m = state.get("m", torch.zeros_like(p.data, device=p.device))  # get first moment estimate
+#                 v = state.get("v", torch.zeros_like(p.data, device=p.device))  # get second moment estimate
+#                 t = state.get("t", 1)  # get current iteration
+#                 grad = p.grad.data  # Get the gradient of loss with respect to p.
+#                 m = betas[0] * m + (1-betas[0]) * grad
+#                 v = betas[1] * v + (1-betas[1]) * grad * grad
+#                 lr_t = lr * (1-betas[1]**t)**0.5 / (1 - betas[0]**t)
+#                 p.data -= lr_t * m / (torch.sqrt(v) + eps)
+#                 p.data -= lr * weight_decay * p.data
+#                 state["t"] = t + 1  # Increment iteration number.
+#                 state["m"] = m  # Update first momentum
+#                 state["v"] = v   # Update second momentum
+#
+#         return loss
+
 class AdamW(torch.optim.Optimizer):
-    def __init__(self,
-                 params,
-                 lr=1e-3,
-                 weight_decay=0.01,
-                 betas=(0.9, 0.999),
-                 eps=1e-8):
-        if lr < 0:
-            raise ValueError(f"Invalid learning rate: {lr}")
-        defaults = {
-            "lr": lr,
-            "weight_decay": weight_decay,
-            "betas": betas,
-            "eps": eps
-        }
+    def __init__(self, params, lr=1e-3, weight_decay=0.01,
+                 betas=(0.9, 0.999), eps=1e-8):
+        defaults = dict(lr=lr, weight_decay=weight_decay,
+                        betas=betas, eps=eps)
         super().__init__(params, defaults)
 
-    def step(self, closure: Optional[Callable] = None):
+    def step(self, closure=None):
         loss = None if closure is None else closure()
         for group in self.param_groups:
-            lr = group["lr"]  # Get the learning rate.
-            weight_decay = group["weight_decay"]
-            betas = group["betas"]
+            lr = group["lr"]
+            wd = group["weight_decay"]
+            beta1, beta2 = group["betas"]
             eps = group["eps"]
+
             for p in group["params"]:
                 if p.grad is None:
                     continue
-                state = self.state[p]  # Get state associated with p.
-                m = state.get("m", torch.zeros_like(p.data, device=p.device))  # get first moment estimate
-                v = state.get("v", torch.zeros_like(p.data, device=p.device))  # get second moment estimate
-                t = state.get("t", 1)  # get current iteration
-                grad = p.grad.data  # Get the gradient of loss with respect to p.
-                m = betas[0] * m + (1-betas[0]) * grad
-                v = betas[1] * v + (1-betas[1]) * grad * grad
-                lr_t = lr * (1-betas[1]**t)**0.5 / (1 - betas[0]**t)
-                p.data -= lr_t * m / (torch.sqrt(v) + eps)
-                p.data -= lr * weight_decay * p.data
-                state["t"] = t + 1  # Increment iteration number.
-                state["m"] = m  # Update first momentum
-                state["v"] = v   # Update second momentum
+                grad = p.grad.data
+                state = self.state[p]
+
+                if len(state) == 0:
+                    state["step"] = 0
+                    state["m"] = torch.zeros_like(p.data)
+                    state["v"] = torch.zeros_like(p.data)
+
+                m, v = state["m"], state["v"]
+                state["step"] += 1
+                t = state["step"]
+
+                # Adam moments
+                m.mul_(beta1).add_(grad, alpha=1 - beta1)
+                v.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
+
+                # bias correction
+                bias_c1 = 1 - beta1 ** t
+                bias_c2 = 1 - beta2 ** t
+                step_size = lr * (bias_c2 ** 0.5) / bias_c1
+
+                # 1) decoupled weight decay
+                if wd != 0:
+                    p.data.mul_(1 - lr * wd)
+
+                # 2) adam update
+                p.data.addcdiv_(m, v.sqrt().add_(eps), value=-step_size)
 
         return loss
+
 
 
 
