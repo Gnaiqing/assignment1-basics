@@ -221,6 +221,11 @@ if __name__ == "__main__":
     cfg2 = load_config(args_pre.config)
     cfg.update(cfg2)
     args = merge_args_with_yaml(parser, cfg)
+    from datetime import datetime
+
+    # Get the current date and time
+    now = datetime.now()
+    timestamp_string = now.strftime("%Y-%m-%d %H:%M:%S")
 
     # expand env vars and resolve device
     args.train_path = _expand_env(args.train_path)
@@ -376,7 +381,7 @@ if __name__ == "__main__":
                     "valid_loss": avg_val_loss,
                 }, step=step)
 
-            output_path = Path(args.checkpoint) / f"lm_{train_filename}_{step}.pt"
+            output_path = Path(args.checkpoint) / f"lm_{train_filename}_{timestamp_string}_{step}.pt"
             os.makedirs(output_path.parent, exist_ok=True)
             save_checkpoint(model, opt, step, output_path)
 
@@ -388,7 +393,7 @@ if __name__ == "__main__":
             "lr": f"{lr_t:.2e}",
         })
 
-    output_path = Path(args.checkpoint) / f"lm_{train_filename}_final.pt"
+    output_path = Path(args.checkpoint) / f"lm_{train_filename}_{timestamp_string}_final.pt"
     save_checkpoint(model, opt, args.total_steps+1, output_path)
     print(f"Final model saved to {output_path}")
     if args.save_wandb:
