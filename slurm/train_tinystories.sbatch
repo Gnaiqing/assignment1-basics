@@ -51,7 +51,7 @@ rsync -a "$DATA_DIR/" "$RUNTIME_DATA_DIR/"
 #device: "auto"
 #EOF
 
-MAIN_CFG="$HOME/cs336/assignment1-basics/configs/tinystories_base.yaml"
+MAIN_CFG="$HOME/cs336/assignment1-basics/configs/tinystories_v1.yaml"
 
 ########################################
 # 4) Run
