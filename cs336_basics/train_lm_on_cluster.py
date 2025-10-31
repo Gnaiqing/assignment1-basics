@@ -297,7 +297,7 @@ if __name__ == "__main__":
     for name, p in model.named_parameters():
         if not p.requires_grad:
             continue
-        if name.endswith("bias") or "norm" in name.lower():
+        if name.endswith("gain"):
             no_decay.append(p)
         else:
             decay.append(p)
@@ -402,14 +402,15 @@ if __name__ == "__main__":
                     "valid_loss": avg_val_loss,
                 }, step=step)
 
-            output_path = Path(args.checkpoint) / f"lm_{train_filename}_{timestamp_string}_{step}.pt"
-            os.makedirs(output_path.parent, exist_ok=True)
-            save_checkpoint(model, opt, step, output_path)
+            # output_path = Path(args.checkpoint) / f"lm_{train_filename}_{timestamp_string}_{step}.pt"
+            # os.makedirs(output_path.parent, exist_ok=True)
+            # save_checkpoint(model, opt, step, output_path)
             if avg_val_loss < best_val_loss:
-                print(f"Best current model saved to {output_path} at step {step}")
                 best_val_loss = avg_val_loss
                 best_model_path = Path(args.checkpoint) / f"lm_{train_filename}_{timestamp_string}_best.pt"
+                os.makedirs(best_model_path.parent, exist_ok=True)
                 save_checkpoint(model, opt, step, best_model_path)
+                print(f"Best current model saved to {output_path} at step {step}")
 
         progress_bar.set_postfix({
             "train_loss(batch)": f"{train_loss_batch:.3f}",

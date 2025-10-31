@@ -23,7 +23,7 @@ warmup_steps: 100
 total_steps: 1250
 weight_decay: 5.0e-3
 beta_0: 0.9
-beta_1: 0.98
+beta_1: 0.999
 eps: 1.0e-8
 max_l2_norm: 1.0
 
