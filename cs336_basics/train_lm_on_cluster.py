@@ -336,6 +336,7 @@ if __name__ == "__main__":
 
     avg_val_loss = float('nan')
     best_val_loss = 100.0
+    best_step = 0
     progress_bar = trange(1, args.total_steps + 1, desc="Training", leave=True)
     start_time = time.time()
     rng = np.random.default_rng(seed=args.seed)
@@ -407,15 +408,17 @@ if __name__ == "__main__":
             # save_checkpoint(model, opt, step, output_path)
             if avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
+                best_step = step
                 best_model_path = Path(args.checkpoint) / f"lm_{train_filename}_{timestamp_string}_best.pt"
                 os.makedirs(best_model_path.parent, exist_ok=True)
                 save_checkpoint(model, opt, step, best_model_path)
-                print(f"Best current model saved to {output_path} at step {step}")
 
         progress_bar.set_postfix({
             "train_loss(batch)": f"{train_loss_batch:.3f}",
             "train_loss(ema)": f"{train_loss_ema_corrected:.3f}",
             "val_loss": f"{avg_val_loss:.3f}",
+            "best_val_loss": f"{best_val_loss:.3f}",
+            "best_step": f"{best_step}",
             "lr": f"{lr_t:.2e}",
         })
 
