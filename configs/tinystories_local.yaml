@@ -1,0 +1,36 @@
+# ---- data & tokenizer ----
+train_path: "../data/TinyStoriesV2-GPT4-train.txt"
+valid_path: "../data/TinyStoriesV2-GPT4-valid.txt"
+vocab_path:  "../preprocess/TinyStoriesV2-GPT4-train-vocab.json"
+merge_path:  "../preprocess/TinyStoriesV2-GPT4-train-merges.txt"
+batch_size: 1024
+context_length: 256
+
+# ---- model ----
+vocab_size: 10000
+d_model: 512
+d_ff: 1344
+rope_theta: 10000
+num_layers: 4
+num_heads: 16
+device: "auto"   # auto -> cuda if available else cpu
+
+# ---- optimizer & schedule ----
+optimizer: "AdamW"
+lr: 3.0e-4
+lr_min: 0.0
+warmup_steps: 200
+total_steps: 1250
+weight_decay: 5.0e-3
+beta_0: 0.9
+beta_1: 0.98
+eps: 1.0e-8
+max_l2_norm: 1.0
+
+# ---- logging & ckpt ----
+checkpoint: "../checkpoint/lm_runs/run1"   # written during training
+eval_interval: 100
+save_wandb: true
+wandb_entity: "uoft-db"
+wandb_project: "cs336-hw1"
+num_val_batches: 100

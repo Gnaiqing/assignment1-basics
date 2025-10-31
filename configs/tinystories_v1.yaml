@@ -18,7 +18,7 @@ device: "auto"   # auto -> cuda if available else cpu
 # ---- optimizer & schedule ----
 optimizer: "AdamW"
 lr: 3.0e-4
-lr_min: 1.0e-4
+lr_min: 3.0e-6
 warmup_steps: 200
 total_steps: 1250
 weight_decay: 5.0e-3
