@@ -5,6 +5,7 @@ import time
 import wandb
 import numpy.typing as npt
 import argparse
+import random
 from cs336_basics.layers import Transformer
 from cs336_basics.optimizer import AdamW, cross_entropy, gradient_clipping, calc_lr_cosine_schedule
 from cs336_basics.tokenizer import Tokenizer
@@ -76,14 +77,8 @@ def get_batch(
     n = len(token_ids)
 
     # Use fixed RNG seed for deterministic sampling (validation)
-    if seed is not None:
-        rng_state = np.random.get_state()
-        np.random.seed(seed)
-
-    start_indices = np.random.choice(n - context_length, batch_size, replace=False)
-
-    if seed is not None:
-        np.random.set_state(rng_state)
+    rng = np.random.default_rng(seed=seed)
+    start_indices = rng.choice(n - context_length, batch_size, replace=False)
 
     sample_inputs = torch.stack([
         torch.from_numpy(token_ids[i:i + context_length].copy()) for i in start_indices
@@ -94,7 +89,6 @@ def get_batch(
     ]).to(torch.long).to(device)
 
     return sample_inputs, sample_outputs
-
 
 
 def save_checkpoint(model: torch.nn.Module, optimizer: torch.optim.Optimizer, iteration: int ,
@@ -184,6 +178,7 @@ if __name__ == "__main__":
     parser.add_argument("--merge_path", type=str, default="../preprocess/TinyStoriesV2-GPT4-train-merges.txt")
     parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--context_length", type=int, default=256)
+    parser.add_argument("--seed", type=int, default=42)
     # model
     parser.add_argument("--vocab_size", type=int, default=10000)
     parser.add_argument("--d_model", type=int, default=512)
@@ -226,6 +221,10 @@ if __name__ == "__main__":
     # Get the current date and time
     now = datetime.now()
     timestamp_string = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    np.random.seed(args.seed)
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
 
     # expand env vars and resolve device
     args.train_path = _expand_env(args.train_path)
@@ -339,12 +338,14 @@ if __name__ == "__main__":
     best_val_loss = 100.0
     progress_bar = trange(1, args.total_steps + 1, desc="Training", leave=True)
     start_time = time.time()
+    rng = np.random.default_rng(seed=args.seed)
 
     for step in progress_bar:
         inputs, targets = get_batch(train_token_ids,
                                     batch_size=args.batch_size,
                                     context_length=args.context_length,
-                                    device=args.device)
+                                    device=args.device,
+                                    seed=int(rng.integers(1e9)))
 
         with autocast_ctx(args.device, data_type):
             logits = model(inputs)
