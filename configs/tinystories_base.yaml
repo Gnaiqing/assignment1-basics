@@ -17,15 +17,15 @@ device: "auto"   # auto -> cuda if available else cpu
 
 # ---- optimizer & schedule ----
 optimizer: "AdamW"
-lr: 1.0e-3
-lr_min: 1.0e-4
+lr: 3.0e-4
+lr_min: 0.0
 warmup_steps: 100
 total_steps: 1250
-weight_decay: 1.0e-2
+weight_decay: 5.0e-3
 beta_0: 0.9
-beta_1: 0.95
+beta_1: 0.999
 eps: 1.0e-8
-max_l2_norm: 10.0
+max_l2_norm: 1.0
 
 # ---- logging & ckpt ----
 checkpoint: "/scratch/$USER/lm_runs/run1"   # written during training

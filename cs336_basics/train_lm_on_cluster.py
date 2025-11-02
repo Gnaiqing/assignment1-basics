@@ -191,7 +191,7 @@ if __name__ == "__main__":
     # optimizer
     parser.add_argument("--optimizer", type=str, default="AdamW")
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--lr_min", type=float, default=1e-4)
+    parser.add_argument("--lr_min", type=float, default=0.0)
     parser.add_argument("--warmup_steps", type=int, default=100)
     parser.add_argument("--total_steps", type=int, default=20000)
     parser.add_argument("--weight_decay", type=float, default=1e-2)
@@ -335,7 +335,7 @@ if __name__ == "__main__":
     ema_bias_correction = 1.0
 
     avg_val_loss = float('nan')
-    best_val_loss = 100.0
+    best_val_loss = float('nan')
     best_step = 0
     progress_bar = trange(1, args.total_steps + 1, desc="Training", leave=True)
     start_time = time.time()
@@ -406,7 +406,7 @@ if __name__ == "__main__":
             # output_path = Path(args.checkpoint) / f"lm_{train_filename}_{timestamp_string}_{step}.pt"
             # os.makedirs(output_path.parent, exist_ok=True)
             # save_checkpoint(model, opt, step, output_path)
-            if avg_val_loss < best_val_loss:
+            if np.isnan(best_val_loss) or avg_val_loss < best_val_loss:
                 best_val_loss = avg_val_loss
                 best_step = step
                 best_model_path = Path(args.checkpoint) / f"lm_{train_filename}_{timestamp_string}_best.pt"

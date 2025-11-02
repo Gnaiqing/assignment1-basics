@@ -41,24 +41,19 @@ rsync -a "$DATA_DIR/" "$RUNTIME_DATA_DIR/"
 ########################################
 # 3) Configuration
 ########################################
-# cat > "$SLURM_TMPDIR/runtime.yaml" <<EOF
-#runtime_data_dir: "$RUNTIME_DATA_DIR"
-#checkpoint: "$CKPT_DIR"
-#archive_dir: "$ARCHIVE_DIR"
-#save_wandb: true
-#eval_interval: 200
-#num_val_batches: 100
-#device: "auto"
-#EOF
 
-MAIN_CFG="$HOME/cs336/assignment1-basics/configs/tinystories_v1.yaml"
+MAIN_CFG="$HOME/cs336/assignment1-basics/configs/tinystories_base.yaml"
 
 ########################################
 # 4) Run
 ########################################
 
+# extra overrides passed by sbatch env
+EXTRA_ARGS=${EXTRA_ARGS:-""}
+
 python -u $HOME/cs336/assignment1-basics/cs336_basics/train_lm_on_cluster.py \
-  --config "$MAIN_CFG"
+  --config "$MAIN_CFG" $EXTRA_ARGS
+
 
 echo "[archive] Copying final/best checkpoints to \$PROJECT…"
 rsync -a --include="*/" --include="*final.pt" --exclude="*" "$CKPT_DIR/" "$ARCHIVE_DIR/"
