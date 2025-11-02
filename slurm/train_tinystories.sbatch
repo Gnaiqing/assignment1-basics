@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=tinyLM
 #SBATCH --account=def-koudas          # your Alliance account (ask your PI if unsure)
-#SBATCH --time=08:00:00
+#SBATCH --time=03:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --gpus-per-node=h100:1
 #SBATCH --mem=64G
