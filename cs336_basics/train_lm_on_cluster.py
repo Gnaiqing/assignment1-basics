@@ -245,17 +245,13 @@ if __name__ == "__main__":
     tokenizer = Tokenizer.from_files(args.vocab_path, args.merge_path, special_tokens=["<|endoftext|>"])
 
     # Prefer staged copies if runtime_data_dir exists (set by SLURM script)
-    data_root = args.runtime_data_dir if (args.runtime_data_dir and os.path.isdir(args.runtime_data_dir)) else None
+    data_root = args.runtime_data_dir if (args.runtime_data_dir and os.path.isdir(args.runtime_data_dir)) else os.path.dirname(args.train_path)
 
     train_filename = Path(args.train_path).stem
     valid_filename = Path(args.valid_path).stem
 
-    if data_root:
-        train_token_path = f"{data_root}/{train_filename}.bin"
-        valid_token_path = f"{data_root}/{valid_filename}.bin"
-    else:
-        train_token_path = f"../preprocess/{train_filename}.bin"
-        valid_token_path = f"../preprocess/{valid_filename}.bin"
+    train_token_path = f"{data_root}/{train_filename}.bin"
+    valid_token_path = f"{data_root}/{valid_filename}.bin"
 
     if args.vocab_size <= np.iinfo(np.uint16).max:
         id_type = np.uint16
