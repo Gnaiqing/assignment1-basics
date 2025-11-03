@@ -1,8 +1,8 @@
 # ---- data & tokenizer ----
-train_path: "../data/TinyStoriesV2-GPT4-train.txt"
-valid_path: "../data/TinyStoriesV2-GPT4-valid.txt"
-vocab_path:  "../preprocess/TinyStoriesV2-GPT4-train-vocab.json"
-merge_path:  "../preprocess/TinyStoriesV2-GPT4-train-merges.txt"
+train_path: "/workspace/assignment1-basics/data/TinyStoriesV2-GPT4-train.txt"
+valid_path: "/workspace/assignment1-basics/data/TinyStoriesV2-GPT4-valid.txt"
+vocab_path:  "/workspace/assignment1-basics/preprocess/TinyStoriesV2-GPT4-train-vocab.json"
+merge_path:  "/workspace/assignment1-basics/preprocess/TinyStoriesV2-GPT4-train-merges.txt"
 batch_size: 1024
 context_length: 256
 
@@ -28,7 +28,7 @@ eps: 1.0e-8
 max_l2_norm: 1.0
 
 # ---- logging & ckpt ----
-checkpoint: "../checkpoint/lm_runs/run1"   # written during training
+checkpoint: "/workspace/assignment1-basics/checkpoint/lm_runs/run1"   # written during training
 eval_interval: 100
 save_wandb: true
 wandb_entity: "uoft-db"

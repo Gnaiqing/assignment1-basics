@@ -1,3 +1,4 @@
+#!/bin/bash
 for lr in 3e-4 1e-4 3e-5 1e-5; do
   for bs in 1024 512 256 128 64; do
     total_steps=$((1280000 / ${bs}))
