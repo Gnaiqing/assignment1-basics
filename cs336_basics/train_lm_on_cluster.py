@@ -252,6 +252,7 @@ if __name__ == "__main__":
 
     train_token_path = f"{data_root}/{train_filename}.bin"
     valid_token_path = f"{data_root}/{valid_filename}.bin"
+    print("Train Token path: ", train_token_path)
 
     if args.vocab_size <= np.iinfo(np.uint16).max:
         id_type = np.uint16

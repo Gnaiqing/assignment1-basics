@@ -6,9 +6,11 @@ set -euo pipefail
 ############################
 # User settings
 ############################
-PYTHON=uv run python
+uv sync
+source .venv/bin/activate
+PYTHON=python
 SCRIPT=./cs336_basics/train_lm_on_cluster.py
-CONFIG=../configs/tinystories_local.yaml
+CONFIG=./configs/tinystories_local.yaml
 
 # Grid
 LRS=(3e-4 1e-4 3e-5 1e-5)
