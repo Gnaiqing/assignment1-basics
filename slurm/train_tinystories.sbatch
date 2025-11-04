@@ -30,7 +30,7 @@ source "$UV_VENV/bin/activate"
 PROJECT_ROOT=/project/def-koudas
 DATA_DIR=$PROJECT_ROOT/datasets/tinystories           # read-only source
 RUNTIME_DATA_DIR=$SLURM_TMPDIR/data                   # fast local SSD during job
-CKPT_DIR=/scratch/$USER/lm_runs/run1                  # frequent writes go here
+CKPT_DIR=${CKPT_DIR:-"/scratch/$USER/lm_runs/run1"}                 # frequent writes go here
 ARCHIVE_DIR=$PROJECT_ROOT/archives/lm_2025_v1         # long-term copies
 
 mkdir -p "$RUNTIME_DATA_DIR" "$CKPT_DIR" "$ARCHIVE_DIR"
